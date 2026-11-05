@@ -1,0 +1,9 @@
+huggingface_hub
+tokenizers
+safetensors
+regex
+pyyaml
+tqdm
+filelock
+packaging
+requests
