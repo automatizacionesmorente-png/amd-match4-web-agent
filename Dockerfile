@@ -1,15 +1,16 @@
 FROM rocm/pytorch:rocm10.0_ubuntu26.04_py3.14_pytorch_release_2.13.0
 
-ENV PYTHONUNBUFFERED=1 MODEL_DIR=/models/qwen3-4b
+ENV PYTHONUNBUFFERED=1 MODEL_DIR=/models/qwen3-4b PIP_BREAK_SYSTEM_PACKAGES=1
 
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
-# None of these depend on torch; transformers goes in with --no-deps so pip can never swap the ROCm torch for a CUDA one.
+# Nothing in requirements.txt depends on torch; transformers goes in with --no-deps so pip can never swap the ROCm torch for a CUDA one.
 RUN pip install --no-cache-dir -r /app/requirements.txt \
- && pip install --no-cache-dir --no-deps transformers \
- && python3 -c "import torch, transformers; v=torch.__version__; print(v, transformers.__version__); assert '+rocm' in v, v"
+ && pip install --no-cache-dir --no-deps "transformers>=4.56,<5" \
+ && python3 -c "import torch, numpy; from transformers import AutoModelForCausalLM, AutoTokenizer; import transformers; v=torch.__version__; print(v, transformers.__version__); assert '+rocm' in v, v"
 
-RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-4B-Instruct-2507', local_dir='/models/qwen3-4b', allow_patterns=['*.json','*.safetensors','*.txt','*.model','merges.txt','vocab.json'])"
+RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-4B-Instruct-2507', local_dir='/models/qwen3-4b', allow_patterns=['*.json','*.safetensors','*.txt'])" \
+ && python3 -c "from transformers import AutoConfig, AutoTokenizer; AutoTokenizer.from_pretrained('/models/qwen3-4b'); print(AutoConfig.from_pretrained('/models/qwen3-4b').model_type)"
 
 ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 COPY app/ /app/

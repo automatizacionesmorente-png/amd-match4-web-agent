@@ -1,7 +1,8 @@
 import re
 
 PATTERNS = [
-    (r"\b(phone|telephone|tel|call|fax|mobile|hotline)\b", r"(?:\+\d{1,3}[\s.-]?)?(?:\(\d{1,4}\)[\s.-]?)?\d{2,4}(?:[\s.-]\d{2,4}){2,4}"),
+    (r"\b(phone|telephone|tel|call|fax|mobile|hotline)\b",
+     r"(?:\+\d{1,3}[\s.-]?)?(?:\(\d{1,4}\)[\s.-]?)?\d{2,4}(?:[\s.-]\d{2,4}){1,4}(?![\d\s.-]*\d)"),
     (r"\b(e-?mail|email address)\b", r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"),
     (r"\b(version|release|firmware|build)\b", r"\bv?\d+(?:\.\d+){1,3}(?:[-.]?(?:rc|beta|alpha|post|dev)\d*)?\b"),
     (r"\b(price|cost|fee|how much|pricing|subscription)\b", r"(?:[$€£¥]\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?(?:USD|EUR|GBP|€|\$))"),
@@ -11,17 +12,25 @@ PATTERNS = [
 ]
 
 
+QSTOP = set("what which who when where how is are was the of a an to in on for and or does do this that site page website value latest current".split())
+
+
 def rule_extract(query, ranked):
     q = query.lower()
+    qwords = [w for w in re.findall(r"[a-z]{3,}", q) if w not in QSTOP]
     for trigger, pat in PATTERNS:
         if not re.search(trigger, q):
             continue
+        near = re.compile(trigger + "|" + "|".join(map(re.escape, qwords)) if qwords else trigger, re.I)
         for page, chunk, score in ranked:
             if score <= 0:
                 continue
-            m = re.search(pat, chunk, re.I)
-            if m:
-                return m.group(0).strip(), page.url, 0.35
+            for m in re.finditer(pat, chunk, re.I):
+                # Only trust a pattern hit when the question's words sit right next to it.
+                if near.search(chunk[max(0, m.start() - 80):m.end() + 30]):
+                    return m.group(0).strip(" ,;:"), page.url, 0.35
+        # PATTERNS run most-specific first; "phone number of" must not fall through to the counting rule.
+        break
     return "", None, 0.0
 
 

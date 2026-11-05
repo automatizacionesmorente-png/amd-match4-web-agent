@@ -117,18 +117,39 @@ class Page:
         self.url, self.title, self.text, self.depth = url, title, text, depth
 
 
-def crawl(start_urls, query, deadline, max_pages=18, max_depth=2, workers=8):
+GUESSED_PATHS = [
+    (r"phone|telephone|call|fax|email|e-mail|address|contact|reach|office|headquarter|location",
+     ["/contact", "/contact-us", "/about", "/about-us"]),
+    (r"price|pricing|cost|fee|plan|subscription|how much", ["/pricing", "/plans", "/prices"]),
+    (r"version|release|download|latest|changelog|update", ["/downloads", "/download", "/releases", "/changelog"]),
+    (r"founder|ceo|team|founded|employee|staff|leadership", ["/about", "/team", "/company"]),
+]
+
+
+def _guessed(start, query):
+    p = urllib.parse.urlparse(start)
+    if not p.scheme or not p.netloc:
+        return []
+    base = f"{p.scheme}://{p.netloc}"
+    out = []
+    for trigger, paths in GUESSED_PATHS:
+        if re.search(trigger, query, re.I):
+            out += [base + path for path in paths]
+    return out
+
+
+def crawl(start_urls, query, deadline, max_pages=20, max_depth=2, workers=8):
     qtok = tokens(query)
-    seen, pages = set(), []
-    frontier = [(10.0, u, 0) for u in start_urls]
+    pages, done = [], set()
     root = start_urls[0] if start_urls else ""
-    with cf.ThreadPoolExecutor(workers) as ex:
+    frontier = [(10.0, u, 0) for u in start_urls]
+    frontier += [(2.0, u, 1) for u in (_guessed(root, query) if root else [])]
+    queued = {u for _, u, _ in frontier}
+    ex = cf.ThreadPoolExecutor(workers)
+    try:
         while frontier and len(pages) < max_pages and time.time() < deadline - 1.0:
             frontier.sort(key=lambda x: -x[0])
             batch, frontier = frontier[:workers], frontier[workers:]
-            batch = [b for b in batch if b[1] not in seen]
-            for b in batch:
-                seen.add(b[1])
             remaining = max(0.5, deadline - time.time() - 0.5)
             futs = {ex.submit(fetch, u, min(6.0, remaining)): (s, u, d) for s, u, d in batch}
             try:
@@ -138,22 +159,27 @@ def crawl(start_urls, query, deadline, max_pages=18, max_depth=2, workers=8):
                         final, raw = f.result()
                     except Exception:
                         continue
-                    if not raw:
+                    if not raw or final in done:
                         continue
+                    done.add(final)
+                    queued.add(final)
                     title, text, links = parse_html(raw)
                     pages.append(Page(final, title, text, d))
-                    seen.add(final)
                     if d >= max_depth:
                         continue
                     for href, ltext in links:
                         nu = urllib.parse.urljoin(final, href.strip()).split("#")[0]
-                        if not nu.startswith("http") or nu in seen or SKIP_EXT.search(nu) or not _same_site(nu, root or final):
+                        if not nu.startswith("http") or nu in queued or SKIP_EXT.search(nu) or not _same_site(nu, root or final):
                             continue
                         sc = _link_score(qtok, nu, ltext)
                         if sc > 0 or d == 0:
+                            queued.add(nu)
                             frontier.append((sc - 0.5 * d, nu, d + 1))
             except cf.TimeoutError:
                 break
+    finally:
+        # A hung fetch must never hold the answer past the deadline.
+        ex.shutdown(wait=False, cancel_futures=True)
     return pages
 
 

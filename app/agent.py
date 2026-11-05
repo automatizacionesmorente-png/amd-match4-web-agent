@@ -56,11 +56,13 @@ class LLM:
 def _parse(raw):
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:
-        return "", []
+        return None, []
     try:
         d = json.loads(m.group(0))
     except Exception:
-        return "", []
+        return None, []
+    if not isinstance(d, dict):
+        return None, []
     ans = d.get("answer", "")
     ans = "" if ans is None else str(ans).strip().strip('"').strip()
     if re.fullmatch(r"(?i)(n/?a|none|null|unknown|not (found|available|stated).*|i don'?t know.*)", ans):
@@ -84,8 +86,8 @@ def solve(llm, query, url=None, corpus=None, budget=22.0):
         starts = [url] if url else _urls_in(query)
         if not starts:
             starts = retrieval.search_web(query, t0 + 7)
-        pages = retrieval.crawl(starts, query, t0 + budget * 0.55) if starts else []
-    ranked = retrieval.passages(pages, query, k=6)
+        pages = retrieval.crawl(starts, query, t0 + budget * 0.65) if starts else []
+    ranked = retrieval.passages(pages, query, k=8)
     if not ranked:
         return {"answer": "", "citations": [], "confidence": 0.0}
 

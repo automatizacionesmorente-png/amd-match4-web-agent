@@ -66,6 +66,8 @@ def main():
     req = {"query": a.query, "url": a.url, "corpus": a.corpus or (a.url if a.url and os.path.isdir(a.url) else None)}
     if req["corpus"]:
         req["url"] = None
+    while not os.path.exists(SOCK) and time.time() - T0 < 8:
+        time.sleep(0.25)
     remaining = BUDGET - (time.time() - T0)
     try:
         req["budget"] = remaining - 2.5
