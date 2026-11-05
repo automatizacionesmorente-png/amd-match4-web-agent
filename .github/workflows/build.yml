@@ -56,4 +56,5 @@ jobs:
           docker rm -f ocr
 
       - name: Push
-        run: docker push "$IMAGE"
+        # Docker Hub sometimes answers 502 on the multi-GiB weights layer; layers already sent are skipped on retry.
+        run: for i in 1 2 3 4 5; do docker push "$IMAGE" && exit 0; echo "push failed, retry $i"; sleep 30; done; exit 1
