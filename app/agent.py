@@ -4,11 +4,13 @@ import re
 import time
 
 import retrieval
-from extract import grounded, rule_extract
+from extract import answer_pattern, grounded, rule_extract
 
 MODEL_DIR = os.environ.get("MODEL_DIR", "/models/qwen3-4b")
 # Crawling never needs more than this; a large test budget then goes to the (slow, CPU) model instead.
 CRAWL_MAX = float(os.environ.get("CRAWL_MAX", "15"))
+# Passages shown to the model. On the GPU a few thousand more prompt tokens cost well under a second.
+TOPK = int(os.environ.get("TOPK", "12"))
 
 PROMPT = """You extract one exact value from web pages.
 
@@ -20,6 +22,9 @@ Sources:
 Rules:
 - Answer with the value only (a number, name, version, price, date, phone, email, code). No sentence, no units the page does not attach, no explanation.
 - Give the COMPLETE value as written on the page (keep prefixes, currency, qualifiers like "Q3 FY27" or "REV-C2").
+- A date is the full date as written (day, month and year), unless the question asks only for the year.
+- The page heading after "|" in a source's title line is part of that page; a version or name there counts.
+- When sources disagree (an old release page against the current one), trust the start page.
 - Use only the sources. If they do not contain the answer, answer "".
 - List in "sources" only the source ids you needed; usually one.
 
@@ -89,12 +94,13 @@ def solve(llm, query, url=None, corpus=None, budget=22.0):
         if not starts:
             starts = retrieval.search_web(query, t0 + 7)
         pages = retrieval.crawl(starts, query, t0 + min(budget * 0.65, CRAWL_MAX)) if starts else []
-    ranked = retrieval.passages(pages, query, k=8)
+    ranked = retrieval.passages(pages, query, k=TOPK, want=answer_pattern(query))
     if not ranked:
         return {"answer": "", "citations": [], "confidence": 0.0}
 
     if llm is not None and llm.ok and time.time() < deadline - 3:
-        src = "\n\n".join(f"[S{i + 1}] {p.url}\n{p.title}\n{c}" for i, (p, c, _) in enumerate(ranked))
+        src = "\n\n".join(f"[S{i + 1}] {p.url}{' (start page)' if p.depth == 0 else ''}\n{p.title}\n{c}"
+                          for i, (p, c, _) in enumerate(ranked))
         try:
             ans, ids = _parse(llm.generate(PROMPT.format(q=query, src=src)))
         except Exception as e:

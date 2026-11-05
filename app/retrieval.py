@@ -5,6 +5,7 @@ import math
 import os
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
@@ -13,22 +14,36 @@ from html.parser import HTMLParser
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 STOP = set("""a an the of to in on for and or is are was were be by with from at as what which who whom whose
 when where why how does do did this that these those it its their there here into about can could should would
-please find tell me give show get i you we they he she my your our list value page site website current latest""".split())
+please find tell me give show get i you we they he she my your our list value page site website
+el la los las de del que cual cuál cuáles es son en un una unos para por con su sus al lo como qué quién cuándo dónde""".split())
 SKIP_EXT = re.compile(r"\.(png|jpe?g|gif|svg|webp|ico|css|js|zip|gz|tar|mp4|mp3|woff2?|ttf|exe|dmg|pdf)(\?|$)", re.I)
 BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article",
               "header", "footer", "table", "ul", "ol", "dt", "dd", "pre", "blockquote", "form", "main"}
 DROP_TAGS = {"script", "style", "noscript", "svg", "template", "iframe"}
 
 
+def _stem(t):
+    for suf in ("ing", "ed", "es", "e", "s"):
+        if len(t) > len(suf) + 3 and t.endswith(suf) and not t[-len(suf) - 1].isdigit():
+            return t[:-len(suf)]
+    return t
+
+
 def tokens(text):
-    return [t for t in re.findall(r"[a-z0-9][a-z0-9.+#-]*", text.lower()) if t not in STOP and len(t) > 1]
+    out = []
+    for t in re.findall(r"[^\W_][\w.+#-]*", text.lower()):
+        t = t.rstrip(".-")
+        # "sqlite-autoconf-3540100.tar.gz" must also match "sqlite", "autoconf" and "tarball"-style words.
+        parts = [t] + ([p for p in re.split(r"[.\-_/]", t) if p] if re.search(r"[.\-_/]", t) and not re.fullmatch(r"[\d.]+", t) else [])
+        out += [_stem(p) for p in parts if p not in STOP and len(p) > 1]
+    return out
 
 
 class _PageParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.parts, self.links, self.title = [], [], ""
-        self._drop, self._in_title, self._href, self._atext = 0, False, None, []
+        self.parts, self.links, self.title, self.h1 = [], [], "", ""
+        self._drop, self._in_title, self._in_h1, self._href, self._atext = 0, False, False, None, []
 
     def handle_starttag(self, tag, attrs):
         if tag in DROP_TAGS:
@@ -37,6 +52,8 @@ class _PageParser(HTMLParser):
         a = dict(attrs)
         if tag == "title":
             self._in_title = True
+        if tag == "h1":
+            self._in_h1 = True
         if tag == "a" and a.get("href"):
             self._href, self._atext = a["href"], [a.get("title") or "", a.get("aria-label") or ""]
         if tag in ("td", "th"):
@@ -52,6 +69,8 @@ class _PageParser(HTMLParser):
             return
         if tag == "title":
             self._in_title = False
+        if tag == "h1":
+            self._in_h1 = False
         if tag == "a" and self._href is not None:
             self.links.append((self._href, " ".join(self._atext).strip()))
             self._href = None
@@ -63,6 +82,8 @@ class _PageParser(HTMLParser):
             return
         if self._in_title:
             self.title += data
+        if self._in_h1 and len(self.h1) < 200:
+            self.h1 += " " + data
         if self._href is not None:
             self._atext.append(data)
         self.parts.append(data)
@@ -77,10 +98,26 @@ def parse_html(raw):
     text = "".join(p.parts)
     text = re.sub(r"[ \t\r\f\v]+", " ", html.unescape(text))
     text = re.sub(r"\n\s*\n+", "\n", text).strip()
-    return p.title.strip(), text, p.links
+    # The page's own heading ("requests 2.34.2") often is the answer, so it travels with the title.
+    title = p.title.strip()
+    h1 = re.sub(r"\s+", " ", html.unescape(p.h1)).strip()
+    if h1 and h1.lower() not in title.lower():
+        title = f"{title} | {h1}" if title else h1
+    return title, text, p.links
 
 
-def fetch(url, timeout=6.0, max_bytes=3_000_000):
+def fetch(url, timeout=6.0, max_bytes=3_000_000, retry=False):
+    try:
+        return _fetch(url, timeout, max_bytes)
+    except urllib.error.HTTPError as e:
+        # The start page is worth one more try when the site is only throttling us.
+        if not retry or e.code not in (429, 500, 502, 503, 504):
+            raise
+        time.sleep(1.0)
+        return _fetch(url, timeout, max_bytes)
+
+
+def _fetch(url, timeout, max_bytes):
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html,*/*;q=0.8",
                                                "Accept-Encoding": "gzip, deflate", "Accept-Language": "en,*;q=0.5"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -106,7 +143,7 @@ def _same_site(a, b):
 def _link_score(qtok, url, text):
     words = set(tokens(text + " " + urllib.parse.unquote(urllib.parse.urlparse(url).path).replace("/", " ").replace("-", " ").replace("_", " ")))
     hit = sum(1 for t in qtok if t in words or any(w.startswith(t[:5]) for w in words if len(t) >= 5))
-    generic = 0.3 if re.search(r"contact|about|pricing|price|download|release|news|support|faq|team|docs", url + " " + text, re.I) else 0
+    generic = 0.3 if re.search(r"contact|about|pricing|price|download|release|news|support|faq|team|docs|precio|nosotros", url + " " + text, re.I) else 0
     return hit + generic
 
 
@@ -118,9 +155,9 @@ class Page:
 
 
 GUESSED_PATHS = [
-    (r"phone|telephone|call|fax|email|e-mail|address|contact|reach|office|headquarter|location",
-     ["/contact", "/contact-us", "/about", "/about-us"]),
-    (r"price|pricing|cost|fee|plan|subscription|how much", ["/pricing", "/plans", "/prices"]),
+    (r"phone|telephone|call|fax|email|e-mail|address|contact|reach|office|headquarter|location|whatsapp|tel[eé]fono|correo|direcci[oó]n|contacto|centralita",
+     ["/contact", "/contact-us", "/contacto", "/kontakt", "/about", "/about-us"]),
+    (r"price|pricing|cost|fee|plan|subscription|how much|precio|cuesta|tarifa", ["/pricing", "/plans", "/prices", "/precios"]),
     (r"version|release|download|latest|changelog|update", ["/downloads", "/download", "/releases", "/changelog"]),
     (r"founder|ceo|team|founded|employee|staff|leadership", ["/about", "/team", "/company"]),
 ]
@@ -151,7 +188,7 @@ def crawl(start_urls, query, deadline, max_pages=20, max_depth=2, workers=8):
             frontier.sort(key=lambda x: -x[0])
             batch, frontier = frontier[:workers], frontier[workers:]
             remaining = max(0.5, deadline - time.time() - 0.5)
-            futs = {ex.submit(fetch, u, min(6.0, remaining)): (s, u, d) for s, u, d in batch}
+            futs = {ex.submit(fetch, u, min(6.0, remaining), retry=u in start_urls): (s, u, d) for s, u, d in batch}
             try:
                 for f in cf.as_completed(futs, timeout=remaining):
                     s, u, d = futs[f]
@@ -208,7 +245,7 @@ def load_corpus(folder):
     return pages
 
 
-def passages(pages, query, k=8, size=700, overlap=150):
+def passages(pages, query, k=8, size=700, overlap=150, want=None):
     qtok = tokens(query)
     chunks = []
     for p in pages:
@@ -241,16 +278,30 @@ def passages(pages, query, k=8, size=700, overlap=150):
                 idf = math.log(1 + (n - df[q] + 0.5) / (df[q] + 0.5))
                 s += idf * f * 2.2 / (f + 1.2 * (0.25 + 0.75 * len(ts) / avg))
         s -= 0.6 * p.depth
+        # A passage holding a value of the asked-for kind (an email for "what email...") is worth a lot,
+        # even when the page is in another language than the question.
+        if want is not None and want.search(c):
+            s += 1.5
         scored.append((p, c, s))
     scored.sort(key=lambda x: -x[2])
-    out, per_page = [], {}
+    out, per_page, seen = [], {}, set()
     for p, c, s in scored:
         if per_page.get(p.url, 0) >= 3:
             continue
+        # Versioned copies of one page (/2.34.1/, /2.34.0/...) repeat the same text; one copy is enough.
+        sig = re.sub(r"\W+", "", c.lower())[:200]
+        if sig in seen:
+            continue
+        seen.add(sig)
         per_page[p.url] = per_page.get(p.url, 0) + 1
         out.append((p, c, s))
         if len(out) >= k:
             break
+    # The top of the start page (hero, "Latest release" banners) is where single facts usually live,
+    # but it is short on question words, so it always gets a seat.
+    lead = next(((p, c, s) for p, c, s in scored if p.depth == 0 and p.text.startswith(c)), None)
+    if lead and all(lead[1] is not c for _, c, _ in out):
+        out = out[:k - 1] + [lead]
     return out
 
 

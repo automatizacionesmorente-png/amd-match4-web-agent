@@ -1,15 +1,24 @@
 import re
 
 PATTERNS = [
-    (r"\b(phone|telephone|tel|call|fax|mobile|hotline)\b",
+    (r"\b(phone|telephone|tel|call|fax|mobile|hotline|whatsapp|tel[eé]fono|centralita|llamar)\b",
      r"(?:\+\d{1,3}[\s.-]?)?(?:\(\d{1,4}\)[\s.-]?)?\d{2,4}(?:[\s.-]\d{2,4}){1,4}(?![\d\s.-]*\d)"),
-    (r"\b(e-?mail|email address)\b", r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"),
+    (r"\b(e-?mail|email address|correo)\b", r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"),
     (r"\b(version|release|firmware|build)\b", r"\bv?\d+(?:\.\d+){1,3}(?:[-.]?(?:rc|beta|alpha|post|dev)\d*)?\b"),
     (r"\b(price|cost|fee|how much|pricing|subscription)\b", r"(?:[$€£¥]\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?(?:USD|EUR|GBP|€|\$))"),
     (r"\b(date|when|released on|founded|deadline|year)\b",
      r"\b(?:\d{4}-\d{2}-\d{2}|\d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2},? \d{4}|(?:19|20)\d{2})\b"),
     (r"\b(how many|number of|count|percent|percentage)\b", r"\b\d[\d,]*(?:\.\d+)?%?"),
 ]
+
+
+def answer_pattern(query):
+    """Regex for the kind of value the question asks for (phone, email, version...), or None."""
+    q = query.lower()
+    for trigger, pat in PATTERNS:
+        if re.search(trigger, q):
+            return re.compile(pat, re.I)
+    return None
 
 
 QSTOP = set("what which who when where how is are was the of a an to in on for and or does do this that site page website value latest current".split())
@@ -26,6 +35,8 @@ def rule_extract(query, ranked):
             if score <= 0:
                 continue
             for m in re.finditer(pat, chunk, re.I):
+                if trigger == PATTERNS[0][0] and len(re.sub(r"\D", "", m.group(0))) < 7:
+                    continue  # "19.69" is a price, not a phone number
                 # Only trust a pattern hit when the question's words sit right next to it.
                 if near.search(chunk[max(0, m.start() - 80):m.end() + 30]):
                     return m.group(0).strip(" ,;:"), page.url, 0.35
