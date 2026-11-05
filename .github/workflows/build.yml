@@ -1,6 +1,8 @@
 name: Build and push image
 
 on:
+  push:
+    branches: [mc2-build]
   workflow_dispatch:
     inputs:
       tag:
@@ -12,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     env:
-      IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/plate-ocr:${{ inputs.tag }}
+      IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/plate-ocr:${{ inputs.tag || 'mc2-v1' }}
     steps:
       - name: Free disk space and move Docker to the larger disk (base image + 7B weights is ~46 GiB)
         run: |
