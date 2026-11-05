@@ -1,0 +1,12 @@
+huggingface_hub>=0.34,<1.0
+tokenizers>=0.22,<0.23
+safetensors>=0.4.3
+regex
+pyyaml
+tqdm
+filelock
+packaging
+requests
+numpy
+pypdf>=5.0
+openpyxl>=3.1

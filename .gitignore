@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.env
+output/
+index/
+models/
+corpus/
+.DS_Store
+SUBMISSION.md
