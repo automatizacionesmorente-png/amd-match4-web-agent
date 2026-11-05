@@ -60,7 +60,7 @@ def main():
     while not os.path.exists(SOCK) and time.time() - T0 < BUDGET - 3:
         time.sleep(0.25)
     try:
-        res = ask({"image": os.path.abspath(a.image)}, BUDGET - (time.time() - T0))
+        res = ask({"image": os.path.abspath(a.image), "deadline": T0 + BUDGET}, BUDGET - (time.time() - T0))
         write(stem, res.get("text"), res.get("confidence") or 0.0)
         if res.get("error"):
             print(f"[app] {res['error']}", file=sys.stderr)
