@@ -46,7 +46,7 @@ class VLM:
             im.seek(0)
         return im.convert("RGB")
 
-    def generate(self, prompt, images=(), max_new=200, system=None):
+    def generate(self, prompt, images=(), max_new=200, system=None, max_time=None):
         images = list(images)
         vision, extra = "", {}
         if images:
@@ -60,5 +60,7 @@ class VLM:
                 f"<|im_start|>user\n{vision}{prompt}<|im_end|>\n<|im_start|>assistant\n")
         enc = self.tok(text, return_tensors="pt").to(self.dev)
         with self.torch.inference_mode():
+            if max_time:
+                extra["max_time"] = max(0.5, max_time)
             out = self.model.generate(**enc, **extra, max_new_tokens=max_new, do_sample=False)
         return self.tok.decode(out[0, enc["input_ids"].shape[1]:], skip_special_tokens=True).strip()
