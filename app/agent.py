@@ -7,6 +7,8 @@ import retrieval
 from extract import grounded, rule_extract
 
 MODEL_DIR = os.environ.get("MODEL_DIR", "/models/qwen3-4b")
+# Crawling never needs more than this; a large test budget then goes to the (slow, CPU) model instead.
+CRAWL_MAX = float(os.environ.get("CRAWL_MAX", "15"))
 
 PROMPT = """You extract one exact value from web pages.
 
@@ -86,7 +88,7 @@ def solve(llm, query, url=None, corpus=None, budget=22.0):
         starts = [url] if url else _urls_in(query)
         if not starts:
             starts = retrieval.search_web(query, t0 + 7)
-        pages = retrieval.crawl(starts, query, t0 + budget * 0.65) if starts else []
+        pages = retrieval.crawl(starts, query, t0 + min(budget * 0.65, CRAWL_MAX)) if starts else []
     ranked = retrieval.passages(pages, query, k=8)
     if not ranked:
         return {"answer": "", "citations": [], "confidence": 0.0}
