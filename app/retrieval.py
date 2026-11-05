@@ -183,8 +183,20 @@ def crawl(start_urls, query, deadline, max_pages=20, max_depth=2, workers=8):
     frontier += [(2.0, u, 1) for u in (_guessed(root, query) if root else [])]
     queued = {u for _, u, _ in frontier}
     ex = cf.ThreadPoolExecutor(workers)
+    # The sitemap reaches deep pages that no link from the start page leads to.
+    smap = ex.submit(_sitemap_urls, root, min(4.0, max(0.5, deadline - time.time() - 1))) if root else None
     try:
         while frontier and len(pages) < max_pages and time.time() < deadline - 1.0:
+            if smap is not None and smap.done():
+                found = smap.exception() is None and smap.result() or []
+                smap = None
+                best = sorted(((_link_score(qtok, u, ""), u) for u in found if u not in queued and not SKIP_EXT.search(u)),
+                              reverse=True)
+                for sc, u in best[:6]:
+                    # A bare URL has no anchor text, so one shared word is too weak a signal on its own.
+                    if sc >= 1.3:
+                        queued.add(u)
+                        frontier.append((sc, u, 1))
             frontier.sort(key=lambda x: -x[0])
             batch, frontier = frontier[:workers], frontier[workers:]
             remaining = max(0.5, deadline - time.time() - 0.5)
@@ -218,6 +230,26 @@ def crawl(start_urls, query, deadline, max_pages=20, max_depth=2, workers=8):
         # A hung fetch must never hold the answer past the deadline.
         ex.shutdown(wait=False, cancel_futures=True)
     return pages
+
+
+def _sitemap_urls(root, timeout):
+    p = urllib.parse.urlparse(root)
+    base = f"{p.scheme}://{p.netloc}"
+    urls, maps = [], [base + "/sitemap.xml"]
+    for _ in range(3):  # a sitemap index points to child sitemaps, sometimes two levels deep
+        nxt = []
+        for sm in maps[:3]:
+            try:
+                _, raw = fetch(sm, timeout, max_bytes=2_000_000)
+            except Exception:
+                continue
+            for loc in re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", raw)[:5000]:
+                loc = html.unescape(loc)
+                (nxt if loc.endswith(".xml") else urls).append(loc)
+        if not nxt or len(urls) > 50:
+            break
+        maps = nxt
+    return [u for u in urls if _same_site(u, root)]
 
 
 CORPUS_EXT = {".html", ".htm", ".xhtml", ".txt", ".md", ".json", ".xml", ".csv"}
