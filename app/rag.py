@@ -10,6 +10,7 @@ STOP = set("""a an the of to in on for and or is are was were be by with from at
 why how does do did this that these those it its their there here into about can could should would please give tell
 me show find value number""".split())
 ID_RE = re.compile(r"\b[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)+#?|\b[A-Z]{1,3}\d{3,}\b")
+QTY_RE = re.compile(r"(?<![\w\-.#/])\d[\d,]*\d(?:\.\d+)?(?![\w\-])")
 STALE_RE = re.compile(r"\b(withdrawn|superseded|obsolete|deprecated|do not use)\b", re.I)
 REV_RE = re.compile(r"^(?P<stem>.*?)[\s_\-]*(?:r|rev|v|version)[\s_\-]?(?P<n>\d+)(?P<tail>.*)$", re.I)
 UNIT_RE = re.compile(r"^(?P<num>[-+]?\d[\d,]*(?:\.\d+)?)\s*(?:°\s*[CF]|degrees?(?:\s+[CF]|\s+celsius)?|seconds?|secs?|s|ms|"
@@ -329,4 +330,11 @@ def answer(idx, searcher, vlm, query, deadline):
     if top["path"] not in with_ans and not top.get("stale") and any(contains(i, top["text"]) for i in ids):
         bridges.append(top["path"])
     cites = list(dict.fromkeys(with_ans + bridges))[:3]
+    # A quantity the question is conditioned on ("at 10,000 units") must appear in the evidence,
+    # otherwise the value belongs to some other condition or item.
+    flat = lambda s: re.sub(r"[,\s]", "", s)
+    evidence = flat(" ".join(files[by_path[p]]["text"] for p in cites))
+    for num in QTY_RE.findall(query):
+        if flat(num) not in evidence:
+            return "", [], 0.05
     return ans, cites, 0.8
