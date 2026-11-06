@@ -10,7 +10,7 @@ import agent  # noqa: E402
 SOCK = os.environ.get("AGENT_SOCK", "/tmp/web-agent.sock")
 
 
-def handle(conn, llm, lock):
+def handle(conn, llm):
     with conn:
         data = b""
         while not data.endswith(b"\n"):
@@ -23,8 +23,8 @@ def handle(conn, llm, lock):
             if req.get("op") == "ping":
                 res = {"ok": True, "model": llm.ok}
             else:
-                with lock:
-                    res = agent.solve(llm, req["query"], req.get("url"), req.get("corpus"), float(req.get("budget", 22)))
+                # No global lock: the model guards itself, so a late answer never blocks the next question.
+                res = agent.solve(llm, req["query"], req.get("url"), req.get("corpus"), float(req.get("budget", 22)))
         except Exception as e:
             res = {"answer": "", "citations": [], "confidence": 0.0, "error": repr(e)}
         conn.sendall((json.dumps(res) + "\n").encode())
@@ -38,10 +38,9 @@ def main():
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.bind(SOCK)
     s.listen(16)
-    lock = threading.Lock()
     while True:
         conn, _ = s.accept()
-        threading.Thread(target=handle, args=(conn, llm, lock), daemon=True).start()
+        threading.Thread(target=handle, args=(conn, llm), daemon=True).start()
 
 
 if __name__ == "__main__":

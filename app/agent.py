@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import threading
 import time
 
 import retrieval
@@ -46,6 +47,7 @@ class LLM:
                 self.model = AutoModelForCausalLM.from_pretrained(MODEL_DIR, torch_dtype=torch.bfloat16)
             self.model.to(dev).eval()
             self.dev = dev
+            self.busy = threading.Lock()
             self.ok = True
             self.generate("Say OK.", 4)
             self._calibrate()
@@ -121,30 +123,46 @@ def solve(llm, query, url=None, corpus=None, budget=22.0):
         for k in range(len(ranked), 2, -1):
             src = "\n\n".join(f"[S{i + 1}] {p.url}{' (start page)' if p.depth == 0 else ''}\n{p.title}\n{c}"
                               for i, (p, c, _) in enumerate(ranked[:k]))
-            if llm.seconds_for(PROMPT.format(q=query, src=src)) < deadline - time.time() - 1.5:
+            # Half the time left: on a CPU, prefill of a long prompt is slower than the short calibration.
+            if llm.seconds_for(PROMPT.format(q=query, src=src)) < (deadline - time.time() - 1.5) * 0.5:
                 prompt = PROMPT.format(q=query, src=src)
                 break
-    if prompt is not None:
-        try:
-            ans, ids = _parse(llm.generate(prompt, max_time=deadline - time.time() - 1))
-        except Exception as e:
-            print(f"[agent] generation failed: {e!r}", flush=True)
-            ans, ids = None, []
-        if ans is not None:
-            picked = []
-            for s in ids:
-                m = re.search(r"\d+", s)
-                if m and 1 <= int(m.group(0)) <= len(ranked):
-                    picked.append(ranked[int(m.group(0)) - 1])
-            if ans:
-                support = picked or [r for r in ranked if grounded(ans, r[1])][:1]
-                support = [r for r in support if grounded(ans, r[1])] or [r for r in ranked if grounded(ans, r[1])][:1]
-                if support:
-                    ans = expand_date(query, ans, [c for _, c, _ in support])
-                    cites = list(dict.fromkeys(p.url for p, _, _ in support))
-                    return {"answer": ans, "citations": cites, "confidence": 0.8}
-            else:
-                return {"answer": "", "citations": [], "confidence": 0.1}
+    # The prompt's prefill cannot be interrupted, so the model runs in its own thread under a hard deadline;
+    # if it is late, or still busy with an earlier late question, the rules answer instead.
+    ans, ids = None, []
+    if prompt is not None and llm.busy.acquire(blocking=False):
+        box = {}
+
+        def run():
+            try:
+                box["raw"] = llm.generate(prompt, max_time=deadline - time.time() - 1)
+            except Exception as e:
+                print(f"[agent] generation failed: {e!r}", flush=True)
+            finally:
+                llm.busy.release()
+
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        th.join(max(0.0, deadline - time.time() - 0.3))
+        if "raw" in box:
+            ans, ids = _parse(box["raw"])
+        else:
+            print("[agent] model late; rules answer", flush=True)
+    if ans is not None:
+        picked = []
+        for s in ids:
+            m = re.search(r"\d+", s)
+            if m and 1 <= int(m.group(0)) <= len(ranked):
+                picked.append(ranked[int(m.group(0)) - 1])
+        if ans:
+            support = picked or [r for r in ranked if grounded(ans, r[1])][:1]
+            support = [r for r in support if grounded(ans, r[1])] or [r for r in ranked if grounded(ans, r[1])][:1]
+            if support:
+                ans = expand_date(query, ans, [c for _, c, _ in support])
+                cites = list(dict.fromkeys(p.url for p, _, _ in support))
+                return {"answer": ans, "citations": cites, "confidence": 0.8}
+        else:
+            return {"answer": "", "citations": [], "confidence": 0.1}
 
     ans, src_url, conf = rule_extract(query, ranked)
     if ans:
