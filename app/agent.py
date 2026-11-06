@@ -48,15 +48,32 @@ class LLM:
             self.dev = dev
             self.ok = True
             self.generate("Say OK.", 4)
+            self._calibrate()
         except Exception as e:
             print(f"[agent] model unavailable, rules only: {e!r}", flush=True)
 
-    def generate(self, prompt, max_new=80):
+    def _calibrate(self):
+        # Measured once at start-up so each question can size its prompt to the time it has left,
+        # whatever the hardware: a few thousand tokens are nothing on the GPU and minutes on a CPU.
+        t = time.time()
+        self.generate("Repeat: " + "the quick brown fox jumps over the lazy dog. " * 50, 1)
+        self.prefill = max(1.0, 520 / max(1e-3, time.time() - t))
+        t = time.time()
+        self.generate("Count from 1 to 30 separated by spaces.", 16)
+        self.per_token = max(1e-3, (time.time() - t) / 16)
+        print(f"[agent] speed: {self.prefill:.0f} prompt tok/s, {self.per_token * 1000:.0f} ms/token", flush=True)
+
+    def seconds_for(self, prompt, max_new=80):
+        return len(self.tok(prompt)["input_ids"]) / getattr(self, "prefill", 1e9) + max_new * getattr(self, "per_token", 0.0)
+
+    def generate(self, prompt, max_new=80, max_time=None):
         msgs = [{"role": "user", "content": prompt}]
         text = self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
         ids = self.tok(text, return_tensors="pt").to(self.dev)
+        extra = {"max_time": max(0.5, max_time)} if max_time else {}
         with self.torch.inference_mode():
-            out = self.model.generate(**ids, max_new_tokens=max_new, do_sample=False, pad_token_id=self.tok.eos_token_id)
+            out = self.model.generate(**ids, max_new_tokens=max_new, do_sample=False,
+                                      pad_token_id=self.tok.eos_token_id, **extra)
         return self.tok.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True)
 
 
@@ -98,11 +115,18 @@ def solve(llm, query, url=None, corpus=None, budget=22.0):
     if not ranked:
         return {"answer": "", "citations": [], "confidence": 0.0}
 
-    if llm is not None and llm.ok and time.time() < deadline - 3:
-        src = "\n\n".join(f"[S{i + 1}] {p.url}{' (start page)' if p.depth == 0 else ''}\n{p.title}\n{c}"
-                          for i, (p, c, _) in enumerate(ranked))
+    prompt = None
+    if llm is not None and llm.ok:
+        # Drop the weakest passages until the model can answer before the deadline; below 3 the rules answer.
+        for k in range(len(ranked), 2, -1):
+            src = "\n\n".join(f"[S{i + 1}] {p.url}{' (start page)' if p.depth == 0 else ''}\n{p.title}\n{c}"
+                              for i, (p, c, _) in enumerate(ranked[:k]))
+            if llm.seconds_for(PROMPT.format(q=query, src=src)) < deadline - time.time() - 1.5:
+                prompt = PROMPT.format(q=query, src=src)
+                break
+    if prompt is not None:
         try:
-            ans, ids = _parse(llm.generate(PROMPT.format(q=query, src=src)))
+            ans, ids = _parse(llm.generate(prompt, max_time=deadline - time.time() - 1))
         except Exception as e:
             print(f"[agent] generation failed: {e!r}", flush=True)
             ans, ids = None, []
