@@ -45,6 +45,22 @@ def rule_extract(query, ranked):
     return "", None, 0.0
 
 
+FULL_DATE = re.compile(PATTERNS[4][1].replace(r"|(?:19|20)\d{2}", ""), re.I)
+
+
+def expand_date(query, answer, chunks):
+    """A bare year for a "when"/"date" question becomes the full date the sources give for that year."""
+    if not re.fullmatch(r"(?:19|20)\d{2}", answer.strip()) or re.search(r"\b(what|which|in which) year\b", query, re.I):
+        return answer
+    if not re.search(r"\b(when|date|founded|released on|incorporated|established)\b", query, re.I):
+        return answer
+    for chunk in chunks:
+        for m in FULL_DATE.finditer(chunk):
+            if answer.strip() in m.group(0):
+                return m.group(0)
+    return answer
+
+
 def norm(s):
     return re.sub(r"[\s\-.·_,]", "", s.upper())
 

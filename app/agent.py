@@ -4,7 +4,7 @@ import re
 import time
 
 import retrieval
-from extract import answer_pattern, grounded, rule_extract
+from extract import answer_pattern, expand_date, grounded, rule_extract
 
 MODEL_DIR = os.environ.get("MODEL_DIR", "/models/qwen3-4b")
 # Crawling never needs more than this; a large test budget then goes to the (slow, CPU) model instead.
@@ -116,6 +116,7 @@ def solve(llm, query, url=None, corpus=None, budget=22.0):
                 support = picked or [r for r in ranked if grounded(ans, r[1])][:1]
                 support = [r for r in support if grounded(ans, r[1])] or [r for r in ranked if grounded(ans, r[1])][:1]
                 if support:
+                    ans = expand_date(query, ans, [c for _, c, _ in support])
                     cites = list(dict.fromkeys(p.url for p, _, _ in support))
                     return {"answer": ans, "citations": cites, "confidence": 0.8}
             else:
