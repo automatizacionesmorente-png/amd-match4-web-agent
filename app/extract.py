@@ -73,3 +73,16 @@ def grounded(answer, text):
         return True
     digits = re.sub(r"\D", "", answer)
     return len(digits) >= 2 and digits in re.sub(r"\D", "", text)
+
+
+ENTITY_SKIP = set("What Which Who When Where How Is Are Was Were Does Do Did Can The A An In On For Of According To This That Its It Please Find Give List Name Tell".split())
+
+
+def missing_entities(query, pages):
+    """Proper names the question asks about that no fetched page mentions ("the capital of Atlantis").
+    Names are rarely paraphrased, so if one is absent from the whole site the question has no answer there."""
+    names = [w for w in re.findall(r"\b[A-Z][a-zA-Z0-9]{2,}\b", query) if w not in ENTITY_SKIP]
+    if not names:
+        return []
+    hay = " ".join(f"{p.url} {p.title} {p.text}" for p in pages).lower()
+    return [n for n in names if n.lower() not in hay]

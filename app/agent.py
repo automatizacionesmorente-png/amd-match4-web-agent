@@ -5,7 +5,7 @@ import threading
 import time
 
 import retrieval
-from extract import answer_pattern, expand_date, grounded, rule_extract
+from extract import answer_pattern, expand_date, grounded, missing_entities, rule_extract
 
 MODEL_DIR = os.environ.get("MODEL_DIR", "/models/qwen3-0.6b")
 # Used instead when a GPU has room for it: reading and choosing the exact value is where a bigger model pays off.
@@ -143,7 +143,10 @@ def solve(llm, query, url=None, corpus=None, budget=22.0):
             starts = retrieval.search_web(query, t0 + 7)
         pages = retrieval.crawl(starts, query, t0 + min(budget * 0.65, CRAWL_MAX)) if starts else []
     ranked = retrieval.passages(pages, query, k=TOPK, want=answer_pattern(query))
-    if not ranked:
+    gone = missing_entities(query, pages) if pages else []
+    if gone:
+        print(f"[agent] not on the site: {gone}; no answer", flush=True)
+    if not ranked or gone:
         return {"answer": "", "citations": [], "confidence": 0.0}
 
     prompt = None
