@@ -18,7 +18,29 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache /usr/local/share/boost /usr/share/swift
           sudo docker image prune --all --force
-          df -h /
+          df -h / /mnt
+
+      - name: Give Docker both disks (the image with two models needs ~110 GB while building)
+        run: |
+          sudo systemctl stop docker docker.socket containerd || true
+          root_free=$(df --output=avail -B1 / | tail -1)
+          mnt_free=$(df --output=avail -B1 /mnt | tail -1)
+          sudo fallocate -l $((root_free - 6*1024*1024*1024)) /pv-root.img
+          sudo fallocate -l $((mnt_free - 2*1024*1024*1024)) /mnt/pv-mnt.img
+          a=$(sudo losetup --find --show /pv-root.img)
+          b=$(sudo losetup --find --show /mnt/pv-mnt.img)
+          sudo pvcreate -q "$a" "$b"
+          sudo vgcreate -q build "$a" "$b"
+          sudo lvcreate -q -l 100%FREE -n data build
+          sudo mkfs.ext4 -q -m 0 /dev/build/data
+          sudo mkdir -p /data && sudo mount /dev/build/data /data
+          for d in docker containerd; do
+            sudo mkdir -p /data/$d /var/lib/$d
+            sudo rm -rf /var/lib/$d/*
+            sudo mount --bind /data/$d /var/lib/$d
+          done
+          sudo systemctl start containerd docker
+          df -h / /mnt /data
 
       - uses: actions/checkout@v4
 
@@ -56,3 +78,7 @@ jobs:
 
       - name: Push
         run: docker push "$IMAGE"
+
+      - name: Disk usage (debug)
+        if: always()
+        run: df -h / /mnt /data || true
