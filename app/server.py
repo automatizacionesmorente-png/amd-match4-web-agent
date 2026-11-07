@@ -10,7 +10,22 @@ import agent  # noqa: E402
 SOCK = os.environ.get("AGENT_SOCK", "/tmp/web-agent.sock")
 
 
-def handle(conn, llm):
+class Loading:
+    """Stands in for the model while it loads: questions are answered by the rules from the first second."""
+    ok = False
+
+
+state = {"llm": Loading()}
+
+
+def load_model():
+    llm = agent.LLM()
+    state["llm"] = llm
+    print(f"[server] model loaded: {llm.ok}", flush=True)
+
+
+def handle(conn):
+    llm = state["llm"]
     with conn:
         data = b""
         while not data.endswith(b"\n"):
@@ -31,16 +46,16 @@ def handle(conn, llm):
 
 
 def main():
-    llm = agent.LLM()
-    print(f"[server] model loaded: {llm.ok}", flush=True)
+    # Listen before loading: a large model takes a while to load, and no question should wait for it.
     if os.path.exists(SOCK):
         os.remove(SOCK)
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.bind(SOCK)
     s.listen(16)
+    threading.Thread(target=load_model, daemon=True).start()
     while True:
         conn, _ = s.accept()
-        threading.Thread(target=handle, args=(conn, llm), daemon=True).start()
+        threading.Thread(target=handle, args=(conn,), daemon=True).start()
 
 
 if __name__ == "__main__":

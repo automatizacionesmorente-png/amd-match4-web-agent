@@ -12,6 +12,11 @@ RUN pip install --no-cache-dir -r /app/requirements.txt \
 RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-4B-Instruct-2507', local_dir='/models/qwen3-4b', allow_patterns=['*.json','*.safetensors','*.txt'])" \
  && python3 -c "from transformers import AutoConfig, AutoTokenizer; AutoTokenizer.from_pretrained('/models/qwen3-4b'); print(AutoConfig.from_pretrained('/models/qwen3-4b').model_type)"
 
+# The bigger model the server picks on a GPU with room for it; the 4B above stays as the fallback.
+RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-14B', local_dir='/models/qwen3-14b', allow_patterns=['*.json','*.safetensors','*.txt'])" \
+ && rm -rf /models/qwen3-14b/.cache /models/qwen3-4b/.cache \
+ && python3 -c "from transformers import AutoTokenizer; t=AutoTokenizer.from_pretrained('/models/qwen3-14b'); s=t.apply_chat_template([{'role':'user','content':'hi'}], tokenize=False, add_generation_prompt=True, enable_thinking=False); assert '<think>' in s and '</think>' in s, s; print('14B template OK')"
+
 ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 COPY app/ /app/
 RUN mkdir -p /app/output

@@ -8,6 +8,9 @@ import retrieval
 from extract import answer_pattern, expand_date, grounded, rule_extract
 
 MODEL_DIR = os.environ.get("MODEL_DIR", "/models/qwen3-4b")
+# Used instead when a GPU has room for it: reading and choosing the exact value is where a bigger model pays off.
+BIG_MODEL_DIR = os.environ.get("BIG_MODEL_DIR", "/models/qwen3-14b")
+BIG_MODEL_MIN_FREE = float(os.environ.get("BIG_MODEL_MIN_FREE_GB", "36")) * 1e9
 # Crawling never needs more than this; a large test budget then goes to the (slow, CPU) model instead.
 CRAWL_MAX = float(os.environ.get("CRAWL_MAX", "15"))
 # Passages shown to the model. On the GPU a few thousand more prompt tokens cost well under a second.
@@ -37,22 +40,46 @@ class LLM:
         self.ok = False
         try:
             import torch
-            from transformers import AutoModelForCausalLM, AutoTokenizer
             self.torch = torch
-            dev = "cuda" if torch.cuda.is_available() else "cpu"
-            self.tok = AutoTokenizer.from_pretrained(MODEL_DIR)
-            try:
-                self.model = AutoModelForCausalLM.from_pretrained(MODEL_DIR, dtype=torch.bfloat16)
-            except TypeError:
-                self.model = AutoModelForCausalLM.from_pretrained(MODEL_DIR, torch_dtype=torch.bfloat16)
-            self.model.to(dev).eval()
-            self.dev = dev
+            self.dev = "cuda" if torch.cuda.is_available() else "cpu"
+            for path in self._candidates():
+                try:
+                    self._load(path)
+                    break
+                except Exception as e:
+                    print(f"[agent] could not load {path}: {e!r}", flush=True)
+                    self.model = None
+                    if self.dev == "cuda":
+                        torch.cuda.empty_cache()
+            else:
+                return
             self.busy = threading.Lock()
             self.ok = True
             self.generate("Say OK.", 4)
             self._calibrate()
         except Exception as e:
+            self.ok = False
             print(f"[agent] model unavailable, rules only: {e!r}", flush=True)
+
+    def _candidates(self):
+        paths = [MODEL_DIR]
+        if self.dev == "cuda" and os.path.isdir(BIG_MODEL_DIR) and BIG_MODEL_DIR != MODEL_DIR:
+            free = self.torch.cuda.mem_get_info()[0]
+            print(f"[agent] GPU free memory: {free / 1e9:.0f} GB", flush=True)
+            if free >= BIG_MODEL_MIN_FREE:
+                paths.insert(0, BIG_MODEL_DIR)
+        return paths
+
+    def _load(self, path):
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        self.tok = AutoTokenizer.from_pretrained(path)
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(path, dtype=self.torch.bfloat16)
+        except TypeError:
+            self.model = AutoModelForCausalLM.from_pretrained(path, torch_dtype=self.torch.bfloat16)
+        self.model.to(self.dev).eval()
+        self.name = os.path.basename(path.rstrip("/"))
+        print(f"[agent] using {self.name} on {self.dev}", flush=True)
 
     def _calibrate(self):
         # Measured once at start-up so each question can size its prompt to the time it has left,
@@ -70,13 +97,15 @@ class LLM:
 
     def generate(self, prompt, max_new=80, max_time=None):
         msgs = [{"role": "user", "content": prompt}]
-        text = self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+        # Qwen3-14B thinks out loud by default; this task needs the value straight away.
+        text = self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False)
         ids = self.tok(text, return_tensors="pt").to(self.dev)
         extra = {"max_time": max(0.5, max_time)} if max_time else {}
         with self.torch.inference_mode():
             out = self.model.generate(**ids, max_new_tokens=max_new, do_sample=False,
                                       pad_token_id=self.tok.eos_token_id, **extra)
-        return self.tok.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True)
+        text = self.tok.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True)
+        return re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S).strip()
 
 
 def _parse(raw):
