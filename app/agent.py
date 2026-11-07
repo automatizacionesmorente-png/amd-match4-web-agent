@@ -7,7 +7,7 @@ import time
 import retrieval
 from extract import answer_pattern, expand_date, grounded, rule_extract
 
-MODEL_DIR = os.environ.get("MODEL_DIR", "/models/qwen3-4b")
+MODEL_DIR = os.environ.get("MODEL_DIR", "/models/qwen3-1.7b")
 # Used instead when a GPU has room for it: reading and choosing the exact value is where a bigger model pays off.
 BIG_MODEL_DIR = os.environ.get("BIG_MODEL_DIR", "/models/qwen3-14b")
 BIG_MODEL_MIN_FREE = float(os.environ.get("BIG_MODEL_MIN_FREE_GB", "36")) * 1e9
