@@ -1,6 +1,6 @@
 FROM rocm/pytorch:rocm10.0_ubuntu26.04_py3.14_pytorch_release_2.13.0
 
-ENV PYTHONUNBUFFERED=1 MODEL_DIR=/models/qwen3-1.7b PIP_BREAK_SYSTEM_PACKAGES=1
+ENV PYTHONUNBUFFERED=1 MODEL_DIR=/models/qwen3-0.6b PIP_BREAK_SYSTEM_PACKAGES=1
 
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
@@ -9,11 +9,11 @@ RUN pip install --no-cache-dir -r /app/requirements.txt \
  && pip install --no-cache-dir --no-deps "transformers>=4.56,<5" \
  && python3 -c "import torch, numpy; from transformers import AutoModelForCausalLM, AutoTokenizer; import transformers; v=torch.__version__; print(v, transformers.__version__); assert '+rocm' in v, v"
 
-RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-1.7B', local_dir='/models/qwen3-1.7b', allow_patterns=['*.json','*.safetensors','*.txt'])" \
- && rm -rf /models/qwen3-1.7b/.cache /root/.cache \
- && python3 -c "from transformers import AutoConfig, AutoTokenizer; AutoTokenizer.from_pretrained('/models/qwen3-1.7b'); print(AutoConfig.from_pretrained('/models/qwen3-1.7b').model_type)"
+RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-0.6B', local_dir='/models/qwen3-0.6b', allow_patterns=['*.json','*.safetensors','*.txt'])" \
+ && rm -rf /models/qwen3-0.6b/.cache /root/.cache \
+ && python3 -c "from transformers import AutoConfig, AutoTokenizer; AutoTokenizer.from_pretrained('/models/qwen3-0.6b'); print(AutoConfig.from_pretrained('/models/qwen3-0.6b').model_type)"
 
-# The model the server uses on a GPU with room for it (the eval GPU). The 1.7B above is the small fallback,
+# The model the server uses on a GPU with room for it (the eval GPU). The 0.6B above is the small fallback,
 # kept small so the whole image stays under the 60 GiB limit (the ROCm base alone is ~30 GB).
 RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-14B', local_dir='/models/qwen3-14b', allow_patterns=['*.json','*.safetensors','*.txt'])" \
  && rm -rf /models/qwen3-14b/.cache /root/.cache \
