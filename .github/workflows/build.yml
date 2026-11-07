@@ -46,6 +46,7 @@ jobs:
         run: |
           size=$(docker image inspect "$IMAGE" --format '{{.Size}}')
           echo "$size bytes"
+          docker history --format '{{.Size}}\t{{.CreatedBy}}' "$IMAGE" | cut -c1-140 | head -12
           test "$size" -lt 64424509440
 
       - name: Smoke test with the real model (CPU, no GPU on this runner)
